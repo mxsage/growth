@@ -1,0 +1,8 @@
+bin/*
+.DS_Store
+*.swp
+Project.xcconfig
+*xcodeproj*
+*.plist
+
+
