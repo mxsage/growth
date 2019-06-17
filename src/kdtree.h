@@ -123,359 +123,364 @@
 namespace jk {
 namespace tree {
 struct L1 {
-  template <std::size_t Dimensions, typename Scalar>
-  static inline Scalar
-  distance(const std::array<Scalar, Dimensions> &location1,
-           const std::array<Scalar, Dimensions> &location2) {
-    auto abs = [](Scalar v) { return v > 0 ? v : -v; };
-    Scalar dist = 0;
-    for (std::size_t i = 0; i < Dimensions; i++) {
-      dist += abs(location1[i] - location2[i]);
+    template <std::size_t Dimensions, typename Scalar>
+    static inline Scalar
+    distance(const std::array<Scalar, Dimensions> &location1,
+             const std::array<Scalar, Dimensions> &location2) {
+        auto abs = [](Scalar v) { return v > 0 ? v : -v; };
+        Scalar dist = 0;
+        for (std::size_t i = 0; i < Dimensions; i++) {
+            dist += abs(location1[i] - location2[i]);
+        }
+        return dist;
     }
-    return dist;
-  }
 };
 
 struct SquaredL2 {
-  template <std::size_t Dimensions, typename Scalar>
-  static inline Scalar
-  distance(const std::array<Scalar, Dimensions> &location1,
-           const std::array<Scalar, Dimensions> &location2) {
-    auto sqr = [](Scalar v) { return v * v; };
-    Scalar dist = 0;
-    for (std::size_t i = 0; i < Dimensions; i++) {
-      dist += sqr(location1[i] - location2[i]);
+    template <std::size_t Dimensions, typename Scalar>
+    static inline Scalar
+    distance(const std::array<Scalar, Dimensions> &location1,
+             const std::array<Scalar, Dimensions> &location2) {
+        auto sqr = [](Scalar v) { return v * v; };
+        Scalar dist = 0;
+        for (std::size_t i = 0; i < Dimensions; i++) {
+            dist += sqr(location1[i] - location2[i]);
+        }
+        return dist;
     }
-    return dist;
-  }
 };
 
 template <class Payload, std::size_t Dimensions, std::size_t BucketSize = 32,
           class Distance = SquaredL2, typename Scalar = double>
 class KDTree {
-private:
-  struct Node;
-  std::vector<Node> m_nodes;
-  std::set<std::size_t> waitingForSplit;
+  private:
+    struct Node;
+    std::vector<Node> m_nodes;
+    std::set<std::size_t> waitingForSplit;
 
-public:
-  using distance_t = Distance;
-  using scalar_t = Scalar;
-  using payload_t = Payload;
-  using point_t = std::array<Scalar, Dimensions>;
-  static const std::size_t dimensions = Dimensions;
-  static const std::size_t bucketSize = BucketSize;
+  public:
+    using distance_t = Distance;
+    using scalar_t = Scalar;
+    using payload_t = Payload;
+    using point_t = std::array<Scalar, Dimensions>;
+    static const std::size_t dimensions = Dimensions;
+    static const std::size_t bucketSize = BucketSize;
 
-  KDTree() { m_nodes.emplace_back(BucketSize); } // initialize the root node
+    KDTree() { m_nodes.emplace_back(BucketSize); } // initialize the root node
 
-  void addPoint(const point_t &location, const Payload &payload,
-                bool autosplit = true) {
-    std::size_t addNode = 0;
+    void addPoint(const point_t &location, const Payload &payload,
+                  bool autosplit = true) {
+        std::size_t addNode = 0;
 
-    while (m_nodes[addNode].m_splitDimension != Dimensions) {
-      m_nodes[addNode].expandBounds(location);
-      if (location[m_nodes[addNode].m_splitDimension] <
-          m_nodes[addNode].m_splitValue) {
-        addNode = m_nodes[addNode].m_children.first;
-      } else {
-        addNode = m_nodes[addNode].m_children.second;
-      }
-    }
-    m_nodes[addNode].add(LocationPayload{location, payload});
-
-    if (m_nodes[addNode].shouldSplit() &&
-        m_nodes[addNode].m_entries % BucketSize == 0) {
-      if (autosplit) {
-        split(addNode);
-      } else {
-        waitingForSplit.insert(addNode);
-      }
-    }
-  }
-
-  void splitOutstanding() {
-    std::vector<std::size_t> searchStack(waitingForSplit.begin(),
-                                         waitingForSplit.end());
-    waitingForSplit.clear();
-    while (searchStack.size() > 0) {
-      std::size_t addNode = searchStack.back();
-      searchStack.pop_back();
-      if (m_nodes[addNode].m_splitDimension == Dimensions) {
-        if (!m_nodes[addNode].shouldSplit()) {
-          continue;
-        }
-
-        if (!split(addNode)) {
-          continue;
-        }
-      }
-      searchStack.push_back(m_nodes[addNode].m_children.first);
-      searchStack.push_back(m_nodes[addNode].m_children.second);
-    }
-  }
-
-  struct DistancePayload {
-    Scalar distance;
-    Payload payload;
-    bool operator<(const DistancePayload &dp) const {
-      return distance < dp.distance;
-    }
-  };
-
-  std::vector<DistancePayload> searchKnn(const point_t &location,
-                                         std::size_t maxPoints) const {
-    return searchCapacityLimitedBall(
-        location, std::numeric_limits<Scalar>::max(), maxPoints);
-  }
-
-  std::vector<DistancePayload> searchBall(const point_t &location,
-                                          Scalar maxRadius) const {
-    return searchCapacityLimitedBall(location, maxRadius,
-                                     std::numeric_limits<std::size_t>::max());
-  }
-
-  std::vector<DistancePayload>
-  searchCapacityLimitedBall(const point_t &location, Scalar maxRadius,
-                            std::size_t maxPoints) const {
-
-    using VecDistPay = std::vector<DistancePayload>;
-    std::size_t numSearchPoints = std::min(maxPoints, m_nodes[0].m_entries);
-
-    VecDistPay returnResults;
-    if (numSearchPoints > 0) {
-      VecDistPay container;
-      if (numSearchPoints < m_nodes[0].m_entries) {
-        container.reserve(numSearchPoints);
-      }
-      std::priority_queue<DistancePayload, VecDistPay> results(
-          std::less<DistancePayload>(), std::move(container));
-      std::vector<std::size_t> searchStack;
-      searchStack.reserve(
-          1 +
-          std::size_t(1.5 * std::log2(1 + m_nodes[0].m_entries / BucketSize)));
-      searchStack.push_back(0);
-      while (searchStack.size() > 0) {
-        std::size_t nodeIndex = searchStack.back();
-        searchStack.pop_back();
-        const Node &node = m_nodes[nodeIndex];
-        Scalar minDist = node.pointRectDist(location);
-        if (maxRadius > minDist && (results.size() < numSearchPoints ||
-                                    results.top().distance > minDist)) {
-          if (node.m_splitDimension == Dimensions) {
-            node.searchCapacityLimitedBall(location, maxRadius, numSearchPoints,
-                                           results);
-          } else {
-            node.queueChildren(location, searchStack);
-          }
-        }
-      }
-
-      returnResults.reserve(results.size());
-      while (results.size() > 0) {
-        returnResults.push_back(results.top());
-        results.pop();
-      }
-      std::reverse(returnResults.begin(), returnResults.end());
-    }
-    return returnResults;
-  }
-
-  DistancePayload search(const point_t &location) const {
-    DistancePayload result;
-    result.distance = std::numeric_limits<Scalar>::infinity();
-
-    if (m_nodes[0].m_entries > 0) {
-      std::vector<std::size_t> searchStack;
-      searchStack.reserve(
-          1 +
-          std::size_t(1.5 * std::log2(1 + m_nodes[0].m_entries / BucketSize)));
-      searchStack.push_back(0);
-
-      while (searchStack.size() > 0) {
-        std::size_t nodeIndex = searchStack.back();
-        searchStack.pop_back();
-        const Node &node = m_nodes[nodeIndex];
-        if (result.distance > node.pointRectDist(location)) {
-          if (node.m_splitDimension == Dimensions) {
-            for (const auto &lp : node.m_locationPayloads) {
-              Scalar nodeDist = Distance::distance(location, lp.location);
-              if (nodeDist < result.distance) {
-                result = DistancePayload{nodeDist, lp.payload};
-              }
+        while (m_nodes[addNode].m_splitDimension != Dimensions) {
+            m_nodes[addNode].expandBounds(location);
+            if (location[m_nodes[addNode].m_splitDimension] <
+                m_nodes[addNode].m_splitValue) {
+                addNode = m_nodes[addNode].m_children.first;
+            } else {
+                addNode = m_nodes[addNode].m_children.second;
             }
-          } else {
-            node.queueChildren(location, searchStack);
-          }
         }
-      }
-    }
-    return result;
-  }
+        m_nodes[addNode].add(LocationPayload{location, payload});
 
-private:
-  struct LocationPayload {
-    point_t location;
-    Payload payload;
-  };
-
-  std::vector<LocationPayload> m_bucketRecycle;
-
-  bool split(std::size_t index) {
-    Node *splitNode = &m_nodes[index];
-    splitNode->m_splitDimension = Dimensions;
-    Scalar width(0);
-    // select widest dimension
-    for (std::size_t i = 0; i < Dimensions; i++) {
-      auto diff = [](std::array<Scalar, 2> vals) { return vals[1] - vals[0]; };
-      Scalar dWidth = diff(splitNode->m_bounds[i]);
-      if (dWidth > width) {
-        splitNode->m_splitDimension = i;
-        width = dWidth;
-      }
+        if (m_nodes[addNode].shouldSplit() &&
+            m_nodes[addNode].m_entries % BucketSize == 0) {
+            if (autosplit) {
+                split(addNode);
+            } else {
+                waitingForSplit.insert(addNode);
+            }
+        }
     }
-    if (splitNode->m_splitDimension == Dimensions) {
-      return false;
+
+    void splitOutstanding() {
+        std::vector<std::size_t> searchStack(waitingForSplit.begin(),
+                                             waitingForSplit.end());
+        waitingForSplit.clear();
+        while (searchStack.size() > 0) {
+            std::size_t addNode = searchStack.back();
+            searchStack.pop_back();
+            if (m_nodes[addNode].m_splitDimension == Dimensions) {
+                if (!m_nodes[addNode].shouldSplit()) {
+                    continue;
+                }
+
+                if (!split(addNode)) {
+                    continue;
+                }
+            }
+            searchStack.push_back(m_nodes[addNode].m_children.first);
+            searchStack.push_back(m_nodes[addNode].m_children.second);
+        }
     }
-    auto avg = [](std::array<Scalar, 2> vals) {
-      return (vals[0] + vals[1]) / Scalar(2);
+
+    struct DistancePayload {
+        Scalar distance;
+        Payload payload;
+        bool operator<(const DistancePayload &dp) const {
+            return distance < dp.distance;
+        }
     };
-    splitNode->m_splitValue =
-        avg(splitNode->m_bounds[splitNode->m_splitDimension]);
 
-    splitNode->m_children =
-        std::pair<std::size_t, std::size_t>(m_nodes.size(), m_nodes.size() + 1);
-    std::size_t entries = splitNode->m_entries;
-    m_nodes.emplace_back(m_bucketRecycle, entries);
-    m_nodes.emplace_back(entries);
-    splitNode = &m_nodes[index]; // in case the vector resized
-    Node *leftNode = &m_nodes[splitNode->m_children.first];
-    Node *rightNode = &m_nodes[splitNode->m_children.second];
-
-    for (const auto &lp : splitNode->m_locationPayloads) {
-      if (lp.location[splitNode->m_splitDimension] < splitNode->m_splitValue) {
-        leftNode->add(lp);
-      } else {
-        rightNode->add(lp);
-      }
+    std::vector<DistancePayload> searchKnn(const point_t &location,
+                                           std::size_t maxPoints) const {
+        return searchCapacityLimitedBall(
+            location, std::numeric_limits<Scalar>::max(), maxPoints);
     }
 
-    if (leftNode->m_entries == 0 || rightNode->m_entries == 0) {
-      splitNode->m_splitValue = 0;
-      splitNode->m_splitDimension = Dimensions;
-      splitNode->m_children = std::pair<std::size_t, std::size_t>(0, 0);
-      std::swap(leftNode->m_locationPayloads, m_bucketRecycle);
-      m_nodes.pop_back();
-      m_nodes.pop_back();
-      return false;
-    } else {
-      splitNode->m_locationPayloads.clear();
-      if (splitNode->m_locationPayloads.capacity() == BucketSize) {
-        std::swap(splitNode->m_locationPayloads, m_bucketRecycle);
-      } else {
-        std::vector<LocationPayload> empty;
-        std::swap(splitNode->m_locationPayloads, empty);
-      }
-      return true;
-    }
-  }
-
-  struct Node {
-    Node(std::size_t capacity) { init(capacity); }
-
-    Node(std::vector<LocationPayload> &recycle, std::size_t capacity) {
-      std::swap(m_locationPayloads, recycle);
-      init(capacity);
+    std::vector<DistancePayload> searchBall(const point_t &location,
+                                            Scalar maxRadius) const {
+        return searchCapacityLimitedBall(
+            location, maxRadius, std::numeric_limits<std::size_t>::max());
     }
 
-    void init(std::size_t capacity) {
-      m_bounds.fill({{std::numeric_limits<Scalar>::infinity(),
-                      -std::numeric_limits<Scalar>::infinity()}});
-      m_locationPayloads.reserve(std::max(BucketSize, capacity));
-    }
+    std::vector<DistancePayload>
+    searchCapacityLimitedBall(const point_t &location, Scalar maxRadius,
+                              std::size_t maxPoints) const {
+        using VecDistPay = std::vector<DistancePayload>;
+        std::size_t numSearchPoints = std::min(maxPoints, m_nodes[0].m_entries);
 
-    void expandBounds(const point_t &location) {
-      for (std::size_t i = 0; i < Dimensions; i++) {
-        if (m_bounds[i][0] > location[i]) {
-          m_bounds[i][0] = location[i];
+        VecDistPay returnResults;
+        if (numSearchPoints > 0) {
+            VecDistPay container;
+            if (numSearchPoints < m_nodes[0].m_entries) {
+                container.reserve(numSearchPoints);
+            }
+            std::priority_queue<DistancePayload, VecDistPay> results(
+                std::less<DistancePayload>(), std::move(container));
+            std::vector<std::size_t> searchStack;
+            searchStack.reserve(
+                1 + std::size_t(1.5 * std::log2(1 + m_nodes[0].m_entries /
+                                                        BucketSize)));
+            searchStack.push_back(0);
+            while (searchStack.size() > 0) {
+                std::size_t nodeIndex = searchStack.back();
+                searchStack.pop_back();
+                const Node &node = m_nodes[nodeIndex];
+                Scalar minDist = node.pointRectDist(location);
+                if (maxRadius > minDist && (results.size() < numSearchPoints ||
+                                            results.top().distance > minDist)) {
+                    if (node.m_splitDimension == Dimensions) {
+                        node.searchCapacityLimitedBall(
+                            location, maxRadius, numSearchPoints, results);
+                    } else {
+                        node.queueChildren(location, searchStack);
+                    }
+                }
+            }
+
+            returnResults.reserve(results.size());
+            while (results.size() > 0) {
+                returnResults.push_back(results.top());
+                results.pop();
+            }
+            std::reverse(returnResults.begin(), returnResults.end());
         }
-        if (m_bounds[i][1] < location[i]) {
-          m_bounds[i][1] = location[i];
+        return returnResults;
+    }
+
+    DistancePayload search(const point_t &location) const {
+        DistancePayload result;
+        result.distance = std::numeric_limits<Scalar>::infinity();
+
+        if (m_nodes[0].m_entries > 0) {
+            std::vector<std::size_t> searchStack;
+            searchStack.reserve(
+                1 + std::size_t(1.5 * std::log2(1 + m_nodes[0].m_entries /
+                                                        BucketSize)));
+            searchStack.push_back(0);
+
+            while (searchStack.size() > 0) {
+                std::size_t nodeIndex = searchStack.back();
+                searchStack.pop_back();
+                const Node &node = m_nodes[nodeIndex];
+                if (result.distance > node.pointRectDist(location)) {
+                    if (node.m_splitDimension == Dimensions) {
+                        for (const auto &lp : node.m_locationPayloads) {
+                            Scalar nodeDist =
+                                Distance::distance(location, lp.location);
+                            if (nodeDist < result.distance) {
+                                result = DistancePayload{nodeDist, lp.payload};
+                            }
+                        }
+                    } else {
+                        node.queueChildren(location, searchStack);
+                    }
+                }
+            }
         }
-      }
-      m_entries++;
+        return result;
     }
 
-    void add(const LocationPayload &lp) {
-      expandBounds(lp.location);
-      m_locationPayloads.push_back(lp);
-    }
+  private:
+    struct LocationPayload {
+        point_t location;
+        Payload payload;
+    };
 
-    bool shouldSplit() const { return m_entries >= BucketSize; }
+    std::vector<LocationPayload> m_bucketRecycle;
 
-    void searchCapacityLimitedBall(
-        const point_t &location, Scalar maxRadius, std::size_t K,
-        std::priority_queue<DistancePayload> &results) const {
-      std::size_t i = 0;
-
-      // this fills up the queue if it isn't full yet
-      for (; results.size() < K && i < m_entries; i++) {
-        const auto &lp = m_locationPayloads[i];
-        Scalar distance = Distance::distance(location, lp.location);
-        if (distance < maxRadius) {
-          results.emplace(DistancePayload{distance, lp.payload});
+    bool split(std::size_t index) {
+        Node *splitNode = &m_nodes[index];
+        splitNode->m_splitDimension = Dimensions;
+        Scalar width(0);
+        // select widest dimension
+        for (std::size_t i = 0; i < Dimensions; i++) {
+            auto diff = [](std::array<Scalar, 2> vals) {
+                return vals[1] - vals[0];
+            };
+            Scalar dWidth = diff(splitNode->m_bounds[i]);
+            if (dWidth > width) {
+                splitNode->m_splitDimension = i;
+                width = dWidth;
+            }
         }
-      }
-
-      // this adds new things to the queue once it is full
-      for (; i < m_entries; i++) {
-        const auto &lp = m_locationPayloads[i];
-        Scalar distance = Distance::distance(location, lp.location);
-        if (distance < maxRadius && distance < results.top().distance) {
-          results.pop();
-          results.emplace(DistancePayload{distance, lp.payload});
+        if (splitNode->m_splitDimension == Dimensions) {
+            return false;
         }
-      }
-    }
+        auto avg = [](std::array<Scalar, 2> vals) {
+            return (vals[0] + vals[1]) / Scalar(2);
+        };
+        splitNode->m_splitValue =
+            avg(splitNode->m_bounds[splitNode->m_splitDimension]);
 
-    void queueChildren(const point_t &location,
-                       std::vector<std::size_t> &searchStack) const {
-      if (location[m_splitDimension] < m_splitValue) {
-        searchStack.push_back(m_children.second);
-        searchStack.push_back(m_children.first); // left is popped first
-      } else {
-        searchStack.push_back(m_children.first);
-        searchStack.push_back(m_children.second); // right is popped first
-      }
-    }
+        splitNode->m_children = std::pair<std::size_t, std::size_t>(
+            m_nodes.size(), m_nodes.size() + 1);
+        std::size_t entries = splitNode->m_entries;
+        m_nodes.emplace_back(m_bucketRecycle, entries);
+        m_nodes.emplace_back(entries);
+        splitNode = &m_nodes[index]; // in case the vector resized
+        Node *leftNode = &m_nodes[splitNode->m_children.first];
+        Node *rightNode = &m_nodes[splitNode->m_children.second];
 
-    Scalar pointRectDist(const point_t &location) const {
-      point_t closestBoundsPoint;
+        for (const auto &lp : splitNode->m_locationPayloads) {
+            if (lp.location[splitNode->m_splitDimension] <
+                splitNode->m_splitValue) {
+                leftNode->add(lp);
+            } else {
+                rightNode->add(lp);
+            }
+        }
 
-      for (std::size_t i = 0; i < Dimensions; i++) {
-        if (m_bounds[i][0] > location[i]) {
-          closestBoundsPoint[i] = m_bounds[i][0];
-        } else if (m_bounds[i][1] < location[i]) {
-          closestBoundsPoint[i] = m_bounds[i][1];
+        if (leftNode->m_entries == 0 || rightNode->m_entries == 0) {
+            splitNode->m_splitValue = 0;
+            splitNode->m_splitDimension = Dimensions;
+            splitNode->m_children = std::pair<std::size_t, std::size_t>(0, 0);
+            std::swap(leftNode->m_locationPayloads, m_bucketRecycle);
+            m_nodes.pop_back();
+            m_nodes.pop_back();
+            return false;
         } else {
-          closestBoundsPoint[i] = location[i];
+            splitNode->m_locationPayloads.clear();
+            if (splitNode->m_locationPayloads.capacity() == BucketSize) {
+                std::swap(splitNode->m_locationPayloads, m_bucketRecycle);
+            } else {
+                std::vector<LocationPayload> empty;
+                std::swap(splitNode->m_locationPayloads, empty);
+            }
+            return true;
         }
-      }
-      return Distance::distance(closestBoundsPoint, location);
     }
 
-    std::size_t m_entries = 0; /// size of the tree, or subtree
+    struct Node {
+        Node(std::size_t capacity) { init(capacity); }
 
-    std::size_t m_splitDimension = Dimensions; /// split dimension of this node
-    Scalar m_splitValue = 0;                   /// split value of this node
+        Node(std::vector<LocationPayload> &recycle, std::size_t capacity) {
+            std::swap(m_locationPayloads, recycle);
+            init(capacity);
+        }
 
-    std::array<std::array<Scalar, 2>, Dimensions>
-        m_bounds; /// bounding box of this node
+        void init(std::size_t capacity) {
+            m_bounds.fill({{std::numeric_limits<Scalar>::infinity(),
+                            -std::numeric_limits<Scalar>::infinity()}});
+            m_locationPayloads.reserve(std::max(BucketSize, capacity));
+        }
 
-    std::pair<std::size_t, std::size_t>
-        m_children; /// subtrees of this node (if not a leaf)
-    std::vector<LocationPayload>
-        m_locationPayloads; /// data held in this node (if a leaf)
-  };
+        void expandBounds(const point_t &location) {
+            for (std::size_t i = 0; i < Dimensions; i++) {
+                if (m_bounds[i][0] > location[i]) {
+                    m_bounds[i][0] = location[i];
+                }
+                if (m_bounds[i][1] < location[i]) {
+                    m_bounds[i][1] = location[i];
+                }
+            }
+            m_entries++;
+        }
+
+        void add(const LocationPayload &lp) {
+            expandBounds(lp.location);
+            m_locationPayloads.push_back(lp);
+        }
+
+        bool shouldSplit() const { return m_entries >= BucketSize; }
+
+        void searchCapacityLimitedBall(
+            const point_t &location, Scalar maxRadius, std::size_t K,
+            std::priority_queue<DistancePayload> &results) const {
+            std::size_t i = 0;
+
+            // this fills up the queue if it isn't full yet
+            for (; results.size() < K && i < m_entries; i++) {
+                const auto &lp = m_locationPayloads[i];
+                Scalar distance = Distance::distance(location, lp.location);
+                if (distance < maxRadius) {
+                    results.emplace(DistancePayload{distance, lp.payload});
+                }
+            }
+
+            // this adds new things to the queue once it is full
+            for (; i < m_entries; i++) {
+                const auto &lp = m_locationPayloads[i];
+                Scalar distance = Distance::distance(location, lp.location);
+                if (distance < maxRadius && distance < results.top().distance) {
+                    results.pop();
+                    results.emplace(DistancePayload{distance, lp.payload});
+                }
+            }
+        }
+
+        void queueChildren(const point_t &location,
+                           std::vector<std::size_t> &searchStack) const {
+            if (location[m_splitDimension] < m_splitValue) {
+                searchStack.push_back(m_children.second);
+                searchStack.push_back(m_children.first); // left is popped first
+            } else {
+                searchStack.push_back(m_children.first);
+                searchStack.push_back(
+                    m_children.second); // right is popped first
+            }
+        }
+
+        Scalar pointRectDist(const point_t &location) const {
+            point_t closestBoundsPoint;
+
+            for (std::size_t i = 0; i < Dimensions; i++) {
+                if (m_bounds[i][0] > location[i]) {
+                    closestBoundsPoint[i] = m_bounds[i][0];
+                } else if (m_bounds[i][1] < location[i]) {
+                    closestBoundsPoint[i] = m_bounds[i][1];
+                } else {
+                    closestBoundsPoint[i] = location[i];
+                }
+            }
+            return Distance::distance(closestBoundsPoint, location);
+        }
+
+        std::size_t m_entries = 0; /// size of the tree, or subtree
+
+        std::size_t m_splitDimension =
+            Dimensions;          /// split dimension of this node
+        Scalar m_splitValue = 0; /// split value of this node
+
+        std::array<std::array<Scalar, 2>, Dimensions>
+            m_bounds; /// bounding box of this node
+
+        std::pair<std::size_t, std::size_t>
+            m_children; /// subtrees of this node (if not a leaf)
+        std::vector<LocationPayload>
+            m_locationPayloads; /// data held in this node (if a leaf)
+    };
 };
 } // namespace tree
 } // namespace jk
