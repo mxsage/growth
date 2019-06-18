@@ -5,7 +5,8 @@
 
 #include "simulation.h"
 
-class ofApp : public ofBaseApp {
+class ofApp : public ofBaseApp
+{
   public:
     void setup();
     void update();
@@ -27,11 +28,6 @@ class ofApp : public ofBaseApp {
 
     ofEasyCam cam;
 
-    ofLight light;
-    ofColor lightColor;
-    float colorHue;
-    ofColor materialColor;
-
     ofMaterial material;
 
     bool updateSimulation{true};
@@ -47,8 +43,11 @@ class ofApp : public ofBaseApp {
     ofParameter<float> planarFactor;
     ofParameter<float> dampening;
     ofParameter<float> threshold;
+    ofParameter<float> foodExponent;
 
     ofParameter<bool> longestAxis;
+    ofParameter<bool> displayPoints;
+    ofParameter<int> numThreads;
 
     ofxPanel gui;
 };

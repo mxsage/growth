@@ -1,6 +1,7 @@
 #include "ofApp.h"
 
-void ofApp::setup() {
+void ofApp::setup()
+{
     ofBackground(0);
     sim.initialize();
 
@@ -16,10 +17,16 @@ void ofApp::setup() {
     gui.add(planarFactor.set("planarFactor", 1, 0, 1));
     gui.add(dampening.set("dampening", 0.1, 0, 1));
     gui.add(threshold.set("threshold", 10, 0, 300));
+    gui.add(foodExponent.set("foodExponent", 1, 0, 10));
+
     gui.add(longestAxis.set("longestAxis", true));
+    gui.add(displayPoints.set("displayPoints", false));
+    gui.add(numThreads.set("numThreads",
+                           std::thread::hardware_concurrency() - 1, 1, 64));
 }
 
-void ofApp::update() {
+void ofApp::update()
+{
     Parameters p;
     p.maxNeighbors = maxNeighbors;
     p.radius = radius;
@@ -29,35 +36,53 @@ void ofApp::update() {
     p.springLength = springLength;
     p.planarFactor = planarFactor;
     p.dampening = dampening;
+    p.foodExponent = foodExponent;
     p.longestAxis = longestAxis;
     p.threshold = threshold;
+    p.numThreads = numThreads;
 
     sim.setParameters(p);
-    if (updateSimulation) {
+    if (updateSimulation)
+    {
         sim.tick();
         m = sim.getMesh();
     }
     ofSetWindowTitle(ofToString(ofGetFrameRate()));
 }
 
-void ofApp::draw() {
-    ofEnableLighting();
+void ofApp::draw()
+{
     cam.begin();
     ofEnableDepthTest();
+    if (displayPoints)
+    {
+        glPointSize(4.0);
+        m.setMode(ofPrimitiveMode::OF_PRIMITIVE_POINTS);
+    }
+    else
+    {
+        m.setMode(ofPrimitiveMode::OF_PRIMITIVE_TRIANGLES);
+    }
+
     m.draw();
     ofDisableDepthTest();
     cam.end();
+
     gui.draw();
 }
 
-void ofApp::keyPressed(int key) {
-    if (key == 'r') {
+void ofApp::keyPressed(int key)
+{
+    if (key == 'r')
+    {
         sim.initialize();
     }
-    if (key == ' ') {
+    if (key == ' ')
+    {
         updateSimulation = !updateSimulation;
     }
-    if (key == 's') {
+    if (key == 's')
+    {
         m.save(ofToDataPath("mesh.ply"));
     }
 }

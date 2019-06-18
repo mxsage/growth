@@ -4,7 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
-struct Parameters {
+struct Parameters
+{
     size_t maxNeighbors{12};
 
     double radius{3};
@@ -19,10 +20,15 @@ struct Parameters {
 
     double threshold{10};
 
+    double foodExponent{1.0};
+
     bool longestAxis{true};
+
+    int numThreads{7};
 };
 
-class Particle {
+class Particle
+{
   public:
     Particle() = default;
     ~Particle() = default;
@@ -46,7 +52,8 @@ class Particle {
     bool frozen{false};
 };
 
-class Simulation {
+class Simulation
+{
   public:
     Simulation() = default;
     ~Simulation() = default;
